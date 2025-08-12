@@ -2,123 +2,155 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vercel Proxy Browser</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
     <style>
         :root {
-            --header-bg: #2c3e50;
-            --body-bg: #34495e;
-            --input-bg: #ecf0f1;
-            --text-color: #ecf0f1;
-            --border-color: #7f8c8d;
+            --bg-color: #f0f2f5;
+            --header-bg: #ffffff;
+            --border-color: #d1d5db;
+            --text-color: #1f2937;
+            --accent-color: #3b82f6;
+            --accent-color-dark: #2563eb;
         }
         html, body {
             margin: 0;
             padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
             height: 100%;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             overflow: hidden;
-            background-color: var(--body-bg);
         }
         .browser-container {
             display: flex;
             flex-direction: column;
-            height: 100%;
+            height: 100vh;
             width: 100%;
+            background: #fff;
+            box-shadow: 0 0 30px rgba(0,0,0,0.1);
         }
         .browser-header {
             display: flex;
             align-items: center;
-            background-color: var(--header-bg);
             padding: 10px;
+            background-color: var(--header-bg);
+            border-bottom: 1px solid var(--border-color);
             flex-shrink: 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            z-index: 10;
+            gap: 10px;
         }
-        #address-bar {
+        #url-input {
             flex-grow: 1;
             padding: 10px 15px;
+            font-size: 16px;
             border-radius: 20px;
             border: 1px solid var(--border-color);
-            background-color: var(--input-bg);
-            font-size: 16px;
-            margin-right: 10px;
-            color: #2c3e50;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
-        #go-button {
+        #url-input:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
+        }
+        #go-btn {
             padding: 10px 20px;
-            border: none;
-            background-color: #3498db;
-            color: white;
             font-size: 16px;
-            font-weight: bold;
+            font-weight: 600;
+            border: none;
+            background-color: var(--accent-color);
+            color: white;
             border-radius: 20px;
             cursor: pointer;
             transition: background-color 0.2s;
         }
-        #go-button:hover {
-            background-color: #2980b9;
+        #go-btn:hover {
+            background-color: var(--accent-color-dark);
         }
-        .iframe-container {
+        .content-window {
             flex-grow: 1;
-            background-color: #fff;
-            border: none;
-            overflow: auto; /* Fallback for browsers not supporting iframe seamless */
+            position: relative;
         }
-        #content-frame {
+        #browser-frame {
             width: 100%;
             height: 100%;
             border: none;
         }
-        .notice {
-            padding: 10px;
-            background-color: #e74c3c;
-            color: white;
-            text-align: center;
-            font-size: 14px;
+        .loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid var(--accent-color);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            display: none; /* Hidden by default */
+        }
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
         }
     </style>
 </head>
 <body>
     <div class="browser-container">
-        <div class="notice">
-            <strong>Security Warning:</strong> Do not enter passwords or sensitive information.
-        </div>
         <div class="browser-header">
-            <input type="text" id="address-bar" placeholder="Enter a URL, e.g., en.wikipedia.org">
-            <button id="go-button">Go</button>
+            <input type="text" id="url-input" placeholder="Enter a website URL (e.g., wikipedia.org)">
+            <button id="go-btn">Go</button>
         </div>
-        <div class="iframe-container">
-            <iframe id="content-frame" title="Proxied Content"></iframe>
+        <div class="content-window">
+            <iframe id="browser-frame" title="Proxied Content"></iframe>
+            <div class="loader" id="loader"></div>
         </div>
     </div>
+
     <script>
-        const addressBar = document.getElementById('address-bar');
-        const goButton = document.getElementById('go-button');
-        const contentFrame = document.getElementById('content-frame');
+        const urlInput = document.getElementById('url-input');
+        const goBtn = document.getElementById('go-btn');
+        const browserFrame = document.getElementById('browser-frame');
+        const loader = document.getElementById('loader');
 
-        function navigate() {
-            let url = addressBar.value.trim();
-            if (!url) return;
+        const PROXY_ENDPOINT = '/api/proxy?url=';
 
-            // Add http:// if no protocol is specified
-            if (!/^https?:\/\//i.test(url)) {
-                url = 'https://' + url;
+        const navigateToUrl = () => {
+            let url = urlInput.value.trim();
+            if (!url) {
+                alert('Please enter a URL.');
+                return;
             }
 
-            // Update the address bar to show the clean URL
-            addressBar.value = url;
+            // Add http:// if no protocol is present for user convenience
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                url = 'https://' + url;
+            }
+            
+            // Update the input to show the full URL
+            urlInput.value = url;
 
-            // Set the iframe source to our proxy endpoint
-            const proxyUrl = `/api/browse?url=${encodeURIComponent(url)}`;
-            contentFrame.src = proxyUrl;
-        }
+            // Show loader and clear the old frame content
+            loader.style.display = 'block';
+            browserFrame.src = 'about:blank';
 
-        goButton.addEventListener('click', navigate);
-        addressBar.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                navigate();
+            // Set the iframe src to our proxy endpoint
+            // The browser will handle making the request
+            browserFrame.src = `${PROXY_ENDPOINT}${encodeURIComponent(url)}`;
+            
+            // Hide loader once the content starts loading
+            browserFrame.onload = () => {
+                loader.style.display = 'none';
+            };
+            browserFrame.onerror = () => {
+                loader.style.display = 'none';
+                alert('Failed to load the page through the proxy.');
+            };
+        };
+
+        goBtn.addEventListener('click', navigateToUrl);
+        urlInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') {
+                navigateToUrl();
             }
         });
     </script>
