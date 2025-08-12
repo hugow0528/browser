@@ -1,8 +1,7 @@
 // Filename: /api/proxy.js
-// This is a Vercel Serverless Function that acts as a web proxy.
+// This is the corrected Vercel Serverless Function for the web proxy.
 
 export default async function handler(request, response) {
-    // Get the URL from the query parameter
     const targetUrl = request.query.url;
 
     if (!targetUrl) {
@@ -10,44 +9,44 @@ export default async function handler(request, response) {
     }
 
     try {
-        // Use Fetch API to get the content from the target URL
-        // `undici` is the modern, standards-compliant fetch library used by Node.js
         const externalResponse = await fetch(targetUrl, {
             headers: {
-                // Pass some basic headers to look like a regular browser
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             },
-            // Important for handling sites with redirects
             redirect: 'follow'
         });
 
-        // Check if the external request was successful
         if (!externalResponse.ok) {
-            // Forward the error status from the target server
             return response.status(externalResponse.status).send(`Error fetching the URL: ${externalResponse.statusText}`);
         }
 
-        // Get the content type from the original response
-        const contentType = externalResponse.headers.get('content-type');
-        
-        // **This is the key part for streaming**
-        // We get the response body as a ReadableStream
-        const bodyStream = externalResponse.body;
-        
-        // Set the appropriate Content-Type header on our response
-        if (contentType) {
-            response.setHeader('Content-Type', contentType);
-        }
+        // Forward the original headers from the target response to our client.
+        // This is important for content type, caching, etc.
+        externalResponse.headers.forEach((value, name) => {
+            // Some headers like 'content-encoding' are handled automatically by Vercel's infrastructure.
+            // Avoid setting them directly to prevent errors.
+            if (name.toLowerCase() !== 'content-encoding' && name.toLowerCase() !== 'transfer-encoding') {
+                response.setHeader(name, value);
+            }
+        });
 
-        // Pipe the body stream from the external response directly to our Vercel response
-        // This sends the data chunk by chunk without loading the whole file into memory.
-        // Vercel's response object is compatible with Node.js streams.
-        bodyStream.pipe(response);
+        // --- THE FIX IS HERE ---
+        // The body from fetch() is a Web Stream (ReadableStream). It does not have a .pipe() method.
+        // We must manually read from it and write to the Vercel response object, which is a Node.js stream.
+        // The `for await...of` loop is the modern, efficient way to handle this.
+        if (externalResponse.body) {
+            for await (const chunk of externalResponse.body) {
+                response.write(chunk);
+            }
+        }
+        
+        response.end(); // End the response stream once all chunks are written.
 
     } catch (error) {
         console.error('Proxy Error:', error);
-        return response.status(500).send(`Server error: ${error.message}`);
+        // Provide a more informative error message to the client
+        return response.status(500).send(`Server error while trying to proxy the request: ${error.message}`);
     }
 }
